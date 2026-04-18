@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Model weights & checkpoints
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.onnx
+*.jit
+*.ckpt
+
+# Audio / data files
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.mp4
+*.npy
+*.npz
+
+# Logs & outputs
+*.log
+*.out
+logs/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Hugging Face cache
+.cache/
