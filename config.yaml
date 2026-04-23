@@ -1,0 +1,35 @@
+# ─────────────────────────────────────────────────────
+# Streaming config (DiCoW_Whisper_Streaming.py)
+# ─────────────────────────────────────────────────────
+streaming:
+  min_chunk_size: 1.0           # seconds per chunk fed to OnlineASRProcessor
+  buffer_trimming: "segment"    # "segment" or "sentence"
+  buffer_trimming_sec: 15.0     # trim audio buffer when longer than this (seconds)
+  
+
+# ─────────────────────────────────────────────────────
+# evaluate_chunk_wer.py config
+# ─────────────────────────────────────────────────────
+
+# Paths to a single audio/annotation pair for evaluation
+
+audio_dir: /scratch/users/ntu/d230009/testset/nsf/audio/
+textgrid_dir: /scratch/users/ntu/d230009/testset/nsf/textgrid/
+rttm_dir: /scratch/users/ntu/d230009/testset/nsf/rttm/
+
+#audio_dir: /scratch/users/ntu/d230009/testset/ami/audio/
+#textgrid_dir: /scratch/users/ntu/d230009/testset/ami/textgrid/
+#rttm_dir: /scratch/users/ntu/d230009/testset/ami/rttm/
+
+#audio_dir: /scratch/users/ntu/d230009/testset/librispeech_test_other/audio/
+#textgrid_dir: /scratch/users/ntu/d230009/testset/librispeech_test_other/textgrid/
+#rttm_dir: /scratch/users/ntu/d230009/testset/librispeech_test_other/rttm/
+
+# DiCoW model (downloaded automatically from HuggingFace if not cached)
+dicow_model: ./model/DiCoW
+
+# Device: "auto" selects cuda if available, else cpu
+device: auto
+
+# Where to write transcripts and WER results
+output_dir: ./nsf

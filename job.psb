@@ -1,0 +1,16 @@
+#!/bin/bash
+#PBS -N dicow_streaming_wer
+#PBS -l select=1:ncpus=2:ngpus=2:mem=32gb
+#PBS -l walltime=23:00:00
+#PBS -q normal
+#PBS -P Personal
+
+#PBS -o /home/users/ntu/d230009/scratch/DiCoW_Streaming/log/logs.log
+#PBS -e /home/users/ntu/d230009/scratch/DiCoW_Streaming/log/errors.err
+
+source /home/users/ntu/d230009/miniconda3/etc/profile.d/conda.sh
+
+conda activate exp_ts_dicow
+cd /home/users/ntu/d230009/scratch/DiCoW_Streaming
+
+python evaluate_streaming_wer.py --config config.yaml

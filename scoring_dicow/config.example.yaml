@@ -1,0 +1,13 @@
+testset_root: /home3/adnan/DICOW/mt-asr-data-prep/testset_tse
+output_root: ./output
+collar: 5
+datasets:
+  ami:
+    predictions: /path/to/ami/hypothesis_multi.jsonl
+    mapping: ami
+  nsf:
+    predictions: /path/to/nsf/hypothesis_multi.jsonl
+    mapping: nsf
+  l2m:
+    predictions: /path/to/l2m/shard_*/hypothesis_multi.jsonl
+    mapping: l2m
