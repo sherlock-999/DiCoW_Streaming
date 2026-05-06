@@ -3,8 +3,6 @@
 # ─────────────────────────────────────────────────────
 streaming:
   min_chunk_size: 1.0           # seconds per chunk fed to OnlineASRProcessor
-  buffer_trimming: "segment"    # "segment" or "sentence"
-  buffer_trimming_sec: 15.0     # trim audio buffer when longer than this (seconds)
   
 
 # ─────────────────────────────────────────────────────
@@ -13,17 +11,21 @@ streaming:
 
 # Paths to a single audio/annotation pair for evaluation
 
-audio_dir: /scratch/users/ntu/d230009/testset/nsf/audio/
-textgrid_dir: /scratch/users/ntu/d230009/testset/nsf/textgrid/
-rttm_dir: /scratch/users/ntu/d230009/testset/nsf/rttm/
+#audio_dir: /scratch/users/ntu/d230009/testset/nsf/audio/
+#textgrid_dir: /scratch/users/ntu/d230009/testset/nsf/textgrid/
+#rttm_dir: /scratch/users/ntu/d230009/testset/nsf/rttm/
 
 #audio_dir: /scratch/users/ntu/d230009/testset/ami/audio/
 #textgrid_dir: /scratch/users/ntu/d230009/testset/ami/textgrid/
 #rttm_dir: /scratch/users/ntu/d230009/testset/ami/rttm/
 
-#audio_dir: /scratch/users/ntu/d230009/testset/librispeech_test_other/audio/
-#textgrid_dir: /scratch/users/ntu/d230009/testset/librispeech_test_other/textgrid/
-#rttm_dir: /scratch/users/ntu/d230009/testset/librispeech_test_other/rttm/
+audio_dir: /home/hesiyuan/Desktop/sortformer_test/testset/librispeech_test_other/audio/
+textgrid_dir: /home/hesiyuan/Desktop/sortformer_test/testset/librispeech_test_other/textgrid/
+rttm_dir: /home/hesiyuan/Desktop/sortformer_test/testset/librispeech_test_other/rttm/
+
+#audio_path: /home/hesiyuan/Desktop/sortformer_test/testset/ami/audio/sdm_EN2002a-4.wav
+#textgrid_path: /home/hesiyuan/Desktop/sortformer_test/testset/ami/textgrid/sdm_EN2002a-4.TextGrid
+#rttm_path: /home/hesiyuan/Desktop/sortformer_test/testset/ami/rttm/sdm_EN2002a-4.rttm
 
 # DiCoW model (downloaded automatically from HuggingFace if not cached)
 dicow_model: ./model/DiCoW
@@ -32,4 +34,4 @@ dicow_model: ./model/DiCoW
 device: auto
 
 # Where to write transcripts and WER results
-output_dir: ./nsf
+output_dir: ./librispeech_test_other_results

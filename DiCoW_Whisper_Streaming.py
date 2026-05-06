@@ -124,26 +124,48 @@ class HypothesisBuffer:
                             break
 
     def flush(self):
-        # returns commited chunk = the longest common prefix of 2 last inserts. 
+        # returns commited chunk = the longest common prefix of 2 last inserts.
         # updates self.buffer, self.new, self.commited_in_buffer
+        '''
+        buffer: [(285.12, 287.02, 'i dunno i mean')]
+        new:    [(285.12, 288.0,  'i dunno i mean it is')]
+
+        → committed:  (285.12, 287.02, 'i dunno i mean')
+        → new[0] becomes: (287.02, 288.0, 'it is')  ← waits in buffer for next iteration
+        '''
         commit = []
         while self.new:
             na, nb, nt = self.new[0]
 
             if len(self.buffer) == 0:
                 break
-            
-            # if words in new match with the words in the previous buffer,
-            # 1. record the same words to commit 
-            # 2. pop the same words in buffer and new
-            if nt == self.buffer[0][2]:
-                commit.append((na,nb,nt))
+
+            ba, bb, bt = self.buffer[0]
+
+            # 1. Exact match: unchanged — commits new's entry with its own timestamps
+            if nt == bt:
+                commit.append((na, nb, nt))
                 self.last_commited_word = nt
                 self.last_commited_time = nb
                 self.buffer.pop(0)
                 self.new.pop(0)
+            
+            # 2. Prefix match: commit buffer entry if new is a strict extension of it
             else:
-                break
+                bt_words = bt.split()
+                nt_words = nt.split()
+                if len(nt_words) > len(bt_words) and nt_words[:len(bt_words)] == bt_words:
+                    # new extends buffer — commit buffer's stable entry and timestamps
+                    commit.append((ba, bb, bt))
+                    self.last_commited_word = bt
+                    self.last_commited_time = bb
+                    self.buffer.pop(0)
+                    # trim new[0] to just the new words, using bb as the split point
+                    remainder = ' '.join(nt_words[len(bt_words):])
+                    self.new[0] = (bb, nb, remainder)
+                else:
+                    break
+        
         # update buffer
         self.buffer = self.new
         self.new = []
@@ -162,20 +184,10 @@ class OnlineASRProcessor:
     SAMPLING_RATE = 16000
     DIAR_FPS = 50  # diarization mask frame rate (frames per second)
 
-    def __init__(self, asr, tokenizer=None, buffer_trimming=("segment", 15), logfile=sys.stderr):
-        """asr: WhisperASR object
-        tokenizer: sentence tokenizer object for the target language. Must have a method *split* that behaves like the one of MosesTokenizer. It can be None, if "segment" buffer trimming option is used, then tokenizer is not used at all.
-        ("segment", 15)
-        buffer_trimming: a pair of (option, seconds), where option is either "sentence" or "segment", and seconds is a number. Buffer is trimmed if it is longer than "seconds" threshold. Default is the most recommended option.
-        logfile: where to store the log. 
-        """
+    def __init__(self, asr, logfile=sys.stderr):
         self.asr = asr
-        self.tokenizer = tokenizer
         self.logfile = logfile
-
         self.init()
-
-        self.buffer_trimming_way, self.buffer_trimming_sec = buffer_trimming
 
     def init(self, offset=None):
         """run this when starting or restarting processing"""
@@ -226,91 +238,77 @@ class OnlineASRProcessor:
 
     def process_iter(self):
         """Runs on the current audio buffer.
-        Returns: a tuple (beg_timestamp, end_timestamp, "text"), or (None, None, ""). 
+        Returns: a tuple (beg_timestamp, end_timestamp, "text"), or (None, None, "").
         The non-emty text is confirmed (committed) partial transcript.
         """
+        buf_start = self.buffer_time_offset
+        buf_end = self.buffer_time_offset + len(self.audio_buffer) / self.SAMPLING_RATE
+        buf_dur = len(self.audio_buffer) / self.SAMPLING_RATE
+        logger.debug("=" * 60)
+        logger.debug(f"[OnlineASRProcessor] audio buffer: start={buf_start:.3f}s  end={buf_end:.3f}s  duration={buf_dur:.3f}s")
+        logger.debug(f"[OnlineASRProcessor] buffer_time_offset: {self.buffer_time_offset:.3f}s")
+        logger.debug(f"[OnlineASRProcessor] committed words so far: {self.commited}")
 
         prompt, non_prompt = self.prompt()
         logger.debug(f"PROMPT: {prompt}")
         logger.debug(f"CONTEXT: {non_prompt}")
         logger.debug(f"transcribing {len(self.audio_buffer)/self.SAMPLING_RATE:2.2f} seconds from {self.buffer_time_offset:2.2f}")
         res = self.asr.transcribe(self.audio_buffer, init_prompt=prompt, diar_mask=self.diarisation_buffer)
-
         # transform to [(beg,end,"word1"), ...]
         tsw = self.asr.ts_words(res)
+        logger.debug("[Whisper Output]:")
+        logger.debug(tsw)
 
         self.transcript_buffer.insert(tsw, self.buffer_time_offset)
+        tb = self.transcript_buffer
+        logger.debug("[HypothesisBuffer] after insert:")
+        logger.debug(f"  transcription buffer : {tb.buffer}")
+        logger.debug(f"  new                  : {tb.new}")
+        logger.debug(f"  commited_in_buffer   : {tb.commited_in_buffer}")
+        logger.debug(f"  last_commited_time   : {tb.last_commited_time:.3f}s")
+
         o = self.transcript_buffer.flush()
+        logger.debug("[HypothesisBuffer] after flush:")
+        logger.debug(f"  transcription buffer : {tb.buffer}")
+        logger.debug(f"  new                  : {tb.new}")
+        logger.debug(f"  commited_in_buffer   : {tb.commited_in_buffer}")
+        logger.debug(f"  last_commited_time   : {tb.last_commited_time:.3f}s")
+        logger.debug(f"  flushed (committed)  : {o}")
+
         self.commited.extend(o)
         completed = self.to_flush(o)
         logger.debug(f">>>>COMPLETE NOW: {completed}")
         the_rest = self.to_flush(self.transcript_buffer.complete())
         logger.debug(f"INCOMPLETE: {the_rest}")
 
-        # there is a newly confirmed text
-
-        if o and self.buffer_trimming_way == "sentence":  # trim the completed sentences
-            if len(self.audio_buffer)/self.SAMPLING_RATE > self.buffer_trimming_sec:  # longer than this
-                self.chunk_completed_sentence()
-
-        
-        if self.buffer_trimming_way == "segment":
-            s = self.buffer_trimming_sec  # trim the completed segments longer than s,
-        else:
-            s = 30 # if the audio buffer is longer than 30s, trim it
-        
-        if len(self.audio_buffer)/self.SAMPLING_RATE > s:
-            self.chunk_completed_segment(res)
-
-            # alternative: on any word
-            #l = self.buffer_time_offset + len(self.audio_buffer)/self.SAMPLING_RATE - 10
-            # let's find commited word that is less
-            #k = len(self.commited)-1
-            #while k>0 and self.commited[k][1] > l:
-            #    k -= 1
-            #t = self.commited[k][1] 
-            logger.debug("chunking segment")
-            #self.chunk_at(t)
+        self.trim_buffer()
 
         logger.debug(f"len of buffer now: {len(self.audio_buffer)/self.SAMPLING_RATE:2.2f}")
         return self.to_flush(o)
 
-    def chunk_completed_sentence(self):
-        if self.commited == []: return
-        logger.debug(self.commited)
-        sents = self.words_to_sentences(self.commited)
-        for s in sents:
-            logger.debug(f"\t\tSENT: {s}")
-        if len(sents) < 2:
-            return
-        while len(sents) > 2:
-            sents.pop(0)
-        # we will continue with audio processing at this timestamp
-        chunk_at = sents[-2][1]
+    def trim_buffer(self):
+        """Trim the audio buffer after each inference call.
 
-        logger.debug(f"--- sentence chunked at {chunk_at:2.2f}")
-        self.chunk_at(chunk_at)
+        On commit: trim to last_commited_time so the next inference starts from
+        the committed boundary. This prevents re-outputting already-committed
+        segments whose filtered-out start time would clear the remainder in the
+        HypothesisBuffer.
 
-    def chunk_completed_segment(self, res):
-        if self.commited == []: return
-
-        ends = self.asr.segments_end_ts(res)
-
-        t = self.commited[-1][1]
-
-        if len(ends) > 1:
-
-            e = ends[-2]+self.buffer_time_offset
-            while len(ends) > 2 and e > t:
-                ends.pop(-1)
-                e = ends[-2]+self.buffer_time_offset
-            if e <= t:
-                logger.debug(f"--- segment chunked at {e:2.2f}")
-                self.chunk_at(e)
-            else:
-                logger.debug(f"--- last segment not within commited area")
-        else:
-            logger.debug(f"--- not enough segments to chunk")
+        Safety fallback: if nothing committed but buffer exceeds 30s (Whisper's
+        hard window limit), trim to the last committed word to avoid silent
+        truncation of the tail.
+        """
+        t = self.transcript_buffer.last_commited_time
+        if t > self.buffer_time_offset:
+            # New commitment — trim to the committed boundary
+            logger.debug(f"--- trimming buffer to last committed time {t:.2f}s")
+            self.chunk_at(t)
+        elif len(self.audio_buffer) / self.SAMPLING_RATE > 30:
+            # Safety: buffer approaching Whisper's 30s hard limit with no new commits
+            if self.commited:
+                t = self.commited[-1][1]
+                logger.debug(f"--- safety trim to last committed word at {t:.2f}s")
+                self.chunk_at(t)
 
     def chunk_at(self, time):
         """trims the hypothesis, audio buffer, and diarisation buffer at "time"
@@ -322,32 +320,6 @@ class OnlineASRProcessor:
             cut_frames = round(cut_seconds * self.DIAR_FPS)
             self.diarisation_buffer = self.diarisation_buffer[:, cut_frames:]
         self.buffer_time_offset = time
-
-    def words_to_sentences(self, words):
-        """Uses self.tokenizer for sentence segmentation of words.
-        Returns: [(beg,end,"sentence 1"),...]
-        """
-        
-        cwords = [w for w in words]
-        t = " ".join(o[2] for o in cwords)
-        s = self.tokenizer.split(t)
-        out = []
-        while s:
-            beg = None
-            end = None
-            sent = s.pop(0).strip()
-            fsent = sent
-            while cwords:
-                b,e,w = cwords.pop(0)
-                w = w.strip()
-                if beg is None and sent.startswith(w):
-                    beg = b
-                elif end is None and sent == w:
-                    end = e
-                    out.append((beg,end,fsent))
-                    break
-                sent = sent[len(w):].strip()
-        return out
 
     def finish(self):
         """Flush the incomplete text when the whole processing ends.
@@ -478,6 +450,137 @@ class VACOnlineASRProcessor(OnlineASRProcessor):
         return ret
 
 
+class DiarisationOnlineASRProcessor(OnlineASRProcessor):
+    """
+    Wraps OnlineASRProcessor with diarization-based speaker activity control.
+    Analogous to VACOnlineASRProcessor but uses the diarization mask for the
+    target speaker as the activity signal instead of the Silero VAD model.
 
+    Detects 0→1 (speech start) and 1→0 (speech end) transitions in the target
+    speaker's diarization row and mirrors VACOnlineASRProcessor's behaviour:
+      - speech start: init self.online at the correct absolute offset, push audio from first active frame
+      - speech end  : push audio up to last active frame, set is_currently_final=True
+      - continuing voice  : push full buffered audio to self.online, clear buffer
+      - continuing silence: keep at most 1s of audio in case speech starts mid-buffer
+    """
 
+    def __init__(self, online_chunk_size, asr, target_speaker_idx=0, logfile=sys.stderr):
+        self.online_chunk_size = online_chunk_size
+        self.target_speaker_idx = target_speaker_idx
+        self.online = OnlineASRProcessor(asr, logfile=logfile)
+        self.logfile = self.online.logfile
+        self.init()
+
+    def init(self):
+        self.online.init()
+        self.current_online_chunk_buffer_size = 0
+        self.is_currently_final = False
+        self._inference_has_run = False  # True once process_iter() has run inference for the current segment
+        self.status = None  # None, "voice", or "nonvoice"
+        self.audio_buffer = np.array([], dtype=np.float32)
+        self.diar_buffer = None  # [num_speakers, num_frames] torch.Tensor or None
+        self.buffer_offset = 0  # in audio samples
+
+    def clear_buffer(self):
+        self.buffer_offset += len(self.audio_buffer)
+        self.audio_buffer = np.array([], dtype=np.float32)
+        self.diar_buffer = None
+
+    def insert_audio_chunk(self, audio, mask_chunk=None):
+        # Stage into outer pre-buffer; self.online only receives trimmed slices at transitions
+        self.audio_buffer = np.append(self.audio_buffer, audio)
+        if mask_chunk is not None:
+            self.diar_buffer = mask_chunk if self.diar_buffer is None \
+                               else torch.cat([self.diar_buffer, mask_chunk], dim=-1)
+
+        if mask_chunk is None:
+            return
+
+        # True if target speaker is active anywhere in this 1s chunk
+        chunk_active = bool(mask_chunk[self.target_speaker_idx].any().item())
+
+        # ── Case 1: 0→1  speech START ─────────────────────────────────
+        # Trim leading silence: find first active frame in accumulated diar_buffer,
+        # init self.online at that absolute offset, push only the speech portion.
+        # [0 0 0 0 | 1 1 1] → first_frame=4 → push audio[start_sample:]
+        if chunk_active and self.status != 'voice':
+            combined_row = self.diar_buffer[self.target_speaker_idx]
+            active_frames = combined_row.nonzero(as_tuple=True)[0]
+            first_frame = int(active_frames[0].item()) if len(active_frames) else 0
+            start_sample = round(first_frame / self.DIAR_FPS * self.SAMPLING_RATE)
+
+            send_audio = self.audio_buffer[start_sample:]
+            send_mask  = self.diar_buffer[:, first_frame:]
+            offset_sec = (self.buffer_offset + start_sample) / self.SAMPLING_RATE
+
+            logger.debug(f"[DiarisationOnlineASRProcessor] SPEECH START at {offset_sec:.3f}s")
+            self.online.init(offset=offset_sec)
+            self.online.insert_audio_chunk(send_audio, send_mask)
+            self.current_online_chunk_buffer_size += len(send_audio)
+            self.status = 'voice'
+            self.clear_buffer()
+
+        # ── Case 2: 1→0  speech END ───────────────────────────────────
+        # Trim trailing silence: find last active frame in accumulated diar_buffer,
+        # push only up to that point, then signal finish() via is_currently_final.
+        # [1 1 1 | 0 0 0 0] → last_frame=3 → push audio[:end_sample]
+        elif not chunk_active and self.status == 'voice':
+            combined_row = self.diar_buffer[self.target_speaker_idx]
+            active_frames = combined_row.nonzero(as_tuple=True)[0]
+            last_frame  = int(active_frames[-1].item()) + 1 if len(active_frames) else 0
+            end_sample  = round(last_frame / self.DIAR_FPS * self.SAMPLING_RATE)
+
+            send_audio = self.audio_buffer[:end_sample]
+            send_mask  = self.diar_buffer[:, :last_frame]
+
+            end_sec = (self.buffer_offset + end_sample) / self.SAMPLING_RATE
+            logger.debug(f"[DiarisationOnlineASRProcessor] SPEECH END at {end_sec:.3f}s")
+            self.online.insert_audio_chunk(send_audio, send_mask)
+            self.current_online_chunk_buffer_size += len(send_audio)
+            self.is_currently_final = True  # process_iter() will call finish() next
+            self.status = 'nonvoice'
+            self.clear_buffer()
+
+        else:
+            # ── Case 3: continuing VOICE — no transition, push full chunk to self.online
+            if self.status == 'voice':
+                self.online.insert_audio_chunk(self.audio_buffer, self.diar_buffer)
+                self.current_online_chunk_buffer_size += len(self.audio_buffer)
+                self.clear_buffer()
+
+            # ── Case 4: continuing SILENCE — push nothing to self.online.
+            # Keep at most 1s as a lookback window: if speech starts mid-buffer,
+            # Case 1 can search diar_buffer across this window for the exact first_frame.
+            else:
+                max_samples = self.SAMPLING_RATE
+                trim = max(0, len(self.audio_buffer) - max_samples)
+                if trim > 0:
+                    self.buffer_offset += trim  # advance offset to keep absolute timestamps correct
+                    self.audio_buffer = self.audio_buffer[-max_samples:]
+                    if self.diar_buffer is not None:
+                        trim_frames = round(trim / self.SAMPLING_RATE * self.DIAR_FPS)
+                        self.diar_buffer = self.diar_buffer[:, trim_frames:]
+
+    def process_iter(self):
+        if self.is_currently_final:
+            return self.finish()
+        elif self.current_online_chunk_buffer_size > self.SAMPLING_RATE * self.online_chunk_size:
+            self.current_online_chunk_buffer_size = 0
+            self._inference_has_run = True
+            return self.online.process_iter()
+        else:
+            logger.debug(f"no online update, diarization status={self.status}")
+            return (None, None, "")
+
+    def finish(self):
+        # Force inference only if no inference has run yet for this segment
+        # (i.e. short segment < online_chunk_size). Avoids re-running on segments
+        # that already had inference with a small leftover, which degrades output.
+        if not self._inference_has_run and self.current_online_chunk_buffer_size > 0:
+            self.online.process_iter()
+        ret = self.online.finish()
+        self.current_online_chunk_buffer_size = 0
+        self._inference_has_run = False
+        self.is_currently_final = False
+        return ret
 

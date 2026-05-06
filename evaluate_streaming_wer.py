@@ -2,7 +2,7 @@
 Evaluate DiCoW WER on chunked audio using oracle diarization.
 
 Pipeline per file:
-  1. load_reference(textgrid)              →  {speaker: transcript}
+  1. load_reference(textgrid)              →  {speaker: transcript}, {speaker: [(t0,t1,text),…]}
   2. load_diarization_mask(rttm, duration) →  speakers, full_mask [num_spk, total_frames]
   3. transcribe_audio(audio, full_mask)    →  {speaker: hypothesis}
      - per chunk: pipeline.diarization_mask = full_mask[:, f_start:f_end]
@@ -11,6 +11,7 @@ Pipeline per file:
 
 import sys
 import time
+import logging
 import argparse
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -31,7 +32,7 @@ from transformers import AutoFeatureExtractor, AutoTokenizer
 from model.DiCoW.modeling_dicow import DiCoWForConditionalGeneration
 from dicow_pipeline import DiCoW_Pipeline
 from dicow_inference import create_lower_uppercase_mapping
-from DiCoW_Whisper_Streaming import DiCoWASR, OnlineASRProcessor
+from DiCoW_Whisper_Streaming import DiCoWASR, DiarisationOnlineASRProcessor
 
 
 _DIAR_FPS = 50  # frames per second used by DiCoW diarization mask
@@ -41,17 +42,22 @@ _DIAR_FPS = 50  # frames per second used by DiCoW diarization mask
 # Step 1 — Reference transcriptions from TextGrid
 # ─────────────────────────────────────────────────────────────────────────────
 
-def load_reference(textgrid_path: str) -> Dict[str, str]:
+def load_reference(textgrid_path: str) -> Tuple[Dict[str, str], Dict[str, List[Tuple[float, float, str]]]]:
     """
-    Parse a Praat TextGrid and return {speaker: transcript}.
-    Uses scoring_dicow's parse_textgrid() which handles clean_text (lowercase,
-    tag removal), then aggregates all intervals per speaker.
+    Parse a Praat TextGrid and return:
+      - {speaker: aggregated transcript}   (for WER)
+      - {speaker: [(start, end, text), …]} (for timestamped transcript)
     """
     rows = parse_textgrid(Path(textgrid_path))
-    by_speaker: Dict[str, List[str]] = defaultdict(list)
+    by_speaker_words: Dict[str, List[str]] = defaultdict(list)
+    by_speaker_segs:  Dict[str, List[Tuple[float, float, str]]] = defaultdict(list)
     for row in rows:
-        by_speaker[row["speaker"]].append(row["words"])
-    return {spk: " ".join(words) for spk, words in by_speaker.items()}
+        by_speaker_words[row["speaker"]].append(row["words"])
+        by_speaker_segs[row["speaker"]].append(
+            (row["start_time"], row["end_time"], row["words"])
+        )
+    transcripts = {spk: " ".join(words) for spk, words in by_speaker_words.items()}
+    return transcripts, dict(by_speaker_segs)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -104,28 +110,28 @@ def transcribe_audio(
     full_diar_mask: torch.Tensor,
     pipeline: DiCoW_Pipeline,
     min_chunk_size: float,
-    buffer_trimming: str,
-    buffer_trimming_sec: float,
 ) -> Tuple[Dict[str, str], Dict[str, float]]:
     """
-    Transcribe each speaker independently using OnlineASRProcessor + DiCoWASR.
+    Transcribe each speaker independently using DiarisationOnlineASRProcessor + DiCoWASR.
     Returns ({speaker: hypothesis}, {speaker: rtf}).
     """
     total_duration = len(audio) / sr
 
     per_spk_hyps: Dict[str, str] = {}
+    per_spk_segs: Dict[str, List[Tuple[float, float, str]]] = {}
     per_spk_rtf:  Dict[str, float] = {}
 
     asr = DiCoWASR(pipeline)
 
     for spk_idx, spk in tqdm(enumerate(speakers)):
         asr.target_speaker_idx = spk_idx
-        online = OnlineASRProcessor(
+        online = DiarisationOnlineASRProcessor(
+            min_chunk_size,
             asr,
-            buffer_trimming=(buffer_trimming, buffer_trimming_sec),
+            target_speaker_idx=spk_idx,
         )
 
-        committed_parts: List[str] = []
+        committed_segs: List[Tuple[float, float, str]] = []
         chunk_times: List[float] = []
         beg = 0.0
 
@@ -145,15 +151,16 @@ def transcribe_audio(
             o = online.process_iter()
             chunk_times.append(time.perf_counter() - t0)
             if o[0] is not None:
-                committed_parts.append(o[2])
+                committed_segs.append(o)
 
             beg = end
 
         o = online.finish()
         if o[0] is not None:
-            committed_parts.append(o[2])
+            committed_segs.append(o)
 
-        per_spk_hyps[spk] = " ".join(committed_parts)
+        per_spk_hyps[spk] = " ".join(seg[2] for seg in committed_segs)
+        per_spk_segs[spk] = committed_segs
 
         spk_proc = sum(chunk_times)
         n = len(chunk_times)
@@ -162,7 +169,7 @@ def transcribe_audio(
         print(f"  [{spk}] RTF={spk_rtf:.3f}  proc={spk_proc:.1f}s  "
               f"chunks={n}  mean={spk_proc/n:.3f}s  max={max(chunk_times):.3f}s")
 
-    return per_spk_hyps, per_spk_rtf
+    return per_spk_hyps, per_spk_segs, per_spk_rtf
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -175,25 +182,24 @@ def evaluate_file(
     tg_path: str,
     pipeline: DiCoW_Pipeline,
     min_chunk_size: float,
-    buffer_trimming: str,
-    buffer_trimming_sec: float,
-) -> Tuple[Dict[str, Tuple[str, str]], Dict[str, float]]:
+):
     """
     Evaluate one recording.
-    Returns ({speaker: (hypothesis, reference)}, {speaker: rtf}).
+    Returns ({speaker: (hypothesis, reference)}, per_spk_segs, per_spk_ref_segs, per_spk_rtf).
     """
-    references = load_reference(tg_path)
+    references, ref_segs = load_reference(tg_path)
 
     audio, sr = librosa.load(audio_path, sr=16_000, mono=True)
 
     speakers, full_diar_mask = load_diarization_mask(rttm_path, len(audio) / sr)
-    hypotheses, per_spk_rtf = transcribe_audio(
-        audio, sr, speakers, full_diar_mask, pipeline,
-        min_chunk_size, buffer_trimming, buffer_trimming_sec,
+    hypotheses, per_spk_segs, per_spk_rtf = transcribe_audio(
+        audio, sr, speakers, full_diar_mask, pipeline, min_chunk_size,
     )
 
     return (
         {spk: (hypotheses.get(spk, ""), references.get(spk, "")) for spk in speakers},
+        per_spk_segs,
+        ref_segs,
         per_spk_rtf,
     )
 
@@ -234,10 +240,16 @@ def main(config_path: str) -> None:
     output_dir = Path(cfg["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    streaming_cfg       = cfg.get("streaming", {})
-    min_chunk_size      = streaming_cfg.get("min_chunk_size", 1.0)
-    buffer_trimming     = streaming_cfg.get("buffer_trimming", "segment")
-    buffer_trimming_sec = streaming_cfg.get("buffer_trimming_sec", 15.0)
+    log_path = output_dir / "debug.log"
+    _handler = logging.FileHandler(log_path, mode="w")
+    _handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    _streaming_logger = logging.getLogger("DiCoW_Whisper_Streaming")
+    _streaming_logger.setLevel(logging.DEBUG)
+    _streaming_logger.addHandler(_handler)
+    _streaming_logger.propagate = False
+
+    streaming_cfg  = cfg.get("streaming", {})
+    min_chunk_size = streaming_cfg.get("min_chunk_size", 1.0)
 
     # Support single-file mode (audio_path) or directory mode (audio_dir)
     if "audio_path" in cfg:
@@ -270,8 +282,24 @@ def main(config_path: str) -> None:
     for audio_path, rttm_path, tg_path in tqdm(file_triples):
         print(f"Processing: {audio_path.name}")
 
-        results, per_spk_rtf = evaluate_file(str(audio_path), str(rttm_path), str(tg_path),
-                                             pipeline, min_chunk_size, buffer_trimming, buffer_trimming_sec)
+        results, per_spk_segs, per_spk_ref_segs, per_spk_rtf = evaluate_file(
+            str(audio_path), str(rttm_path), str(tg_path), pipeline, min_chunk_size
+        )
+
+        # Write timestamped transcript + reference side-by-side for inspection
+        transcript_path = output_dir / f"{audio_path.stem}_transcript.txt"
+        with open(transcript_path, "w") as tf:
+            for spk, (hyp, ref) in results.items():
+                tf.write(f"{'─'*60}\n")
+                tf.write(f"SPEAKER: {spk}\n")
+                tf.write(f"{'─'*60}\n")
+                tf.write("HYPOTHESIS (with timestamps):\n")
+                for seg_beg, seg_end, seg_text in per_spk_segs.get(spk, []):
+                    tf.write(f"  [{seg_beg:8.2f} - {seg_end:8.2f}]  {seg_text}\n")
+                tf.write("\nREFERENCE (with timestamps):\n")
+                for seg_beg, seg_end, seg_text in per_spk_ref_segs.get(spk, []):
+                    tf.write(f"  [{seg_beg:8.2f} - {seg_end:8.2f}]  {seg_text}\n")
+                tf.write("\n")
 
         file_s = file_d = file_i = file_h = 0
         spk_lines = []
