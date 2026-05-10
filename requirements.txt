@@ -1,20 +1,16 @@
-# Core
+# Core ML
 numpy
-torch
-librosa
-soundfile
-
-# Whisper backends (install at least one)
-faster-whisper          # recommended backend (default)
-# whisper-timestamped   # alternative backend
-
-# Transformers / DiCoW model
+torch>=2.0.0
 transformers
-pandas
 
-# Sentence tokenizers (optional, for buffer_trimming=sentence)
-# mosestokenizer        # for most languages
-# wtpsplit              # alternative sentence splitter
+# Audio I/O
+librosa>=0.10.0
+soundfile>=0.11.0
 
-# VAD (required for VACOnlineASRProcessor)
-# silero-vad is loaded via torch.hub at runtime, no pip install needed
+# Evaluation
+jiwer
+pyyaml
+tqdm
+
+# UI (used in dicow_pipeline.py)
+gradio>=3.0.0
