@@ -1,8 +1,20 @@
 # ─────────────────────────────────────────────────────
-# Streaming config (DiCoW_Whisper_Streaming.py)
+# run_streaming.py / Streaming_Sortformer_DiCoW_Whisper_Streaming.py config
 # ─────────────────────────────────────────────────────
-streaming:
-  min_chunk_size: 1.0           # seconds per chunk fed to OnlineASRProcessor
+dicow:
+  model_path: ./model/DiCoW
+
+sortformer:
+  model_path: ./model/Streaming_Sortformer/diar_streaming_sortformer_4spk-v2.1.nemo
+  postprocessing_yaml: ./model/Streaming_Sortformer/postprocess.yaml
+  chunk_len: 6                  # Sortformer frames per chunk (6 × 80ms = 0.48s)
+  fifo_len: 188
+  spkcache_len: 188
+  spkcache_update_period: 144
+  pred_threshold: 0.5           # sigmoid threshold for binarising the mask
+
+pipeline:
+  transcription_interval_s: 0.96  # seconds of audio to accumulate before each DiCoW call
   
 
 # ─────────────────────────────────────────────────────

@@ -14,3 +14,4 @@ tqdm
 
 # UI (used in dicow_pipeline.py)
 gradio>=3.0.0
+omegaconf>=2.0.0

@@ -20,6 +20,9 @@ Diar mask    ──►  (detects speech start/end)            (DiCoW pipeline)
 conda create -n socow python=3.10
 conda activate socow
 pip install -r requirements.txt
+
+pip install 'nemo_toolkit[asr]==2.6.0'
+pip install 'transformers==4.42.0' 'tokenizers==0.19.1'
 ```
 
 The DiCoW model must be placed locally (or downloaded from HuggingFace) at the path specified in `config.yaml`:
