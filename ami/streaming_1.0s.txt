@@ -1,7 +1,0 @@
-sdm_MTG_32000_sc_meetup_0-0  WER=13.00%  (S=84 D=73 I=29 H=1274)
-[linda] cpWER=13.02%  (S=21 D=26 I=9 H=383)
-[rachel] cpWER=9.33%  (S=19 D=22 I=2 H=420)
-[ron] cpWER=15.58%  (S=22 D=18 I=8 H=268)
-[sarah] cpWER=16.81%  (S=22 D=7 I=10 H=203)
-
-Overall WER = 0.1300

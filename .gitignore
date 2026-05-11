@@ -22,6 +22,7 @@ env/
 *.onnx
 *.jit
 *.ckpt
+*.nemo
 
 # Audio / data files
 *.wav
@@ -36,6 +37,8 @@ env/
 *.log
 *.out
 logs/
+diarisation_masks/
+*_results/
 
 # Jupyter
 .ipynb_checkpoints/
@@ -53,5 +56,3 @@ Thumbs.db
 
 # Hugging Face cache
 .cache/
-
-*.txt
